@@ -68,6 +68,7 @@ void loop() {
     }
     if (!digitalRead(EXIT_BUTTON_PIN)){
         checkForAdmin();
+      return;
     }
     if(key = '1'){
                 lcd.clear();
