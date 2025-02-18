@@ -61,15 +61,16 @@ void printMenu(){
 }
 
 void loop() {
-    void printMenu();
+    printMenu();
     char key = keypad.getKey();
-    while(key == NO_KEY && digitalRead(EXIT_BUTTON_PIN) ){ //input ko lagi wait gardai from keypad
+    while(key == NO_KEY && (digitalRead(EXIT_BUTTON_PIN) == HIGH) ){ //input ko lagi wait gardai from keypad
       key = keypad.getKey();
     }
     if (!digitalRead(EXIT_BUTTON_PIN)){
         checkForAdmin();
+        return;
     }
-    if(key = '1'){
+    if(key == '1'){
                 lcd.clear();
                 lcd.setCursor(0, 0);
                 lcd.print("Enroll Mode");
@@ -77,7 +78,7 @@ void loop() {
                 delay(1000);
                 enrollFinger();
     }
-    else if(key = '2'){
+    else if(key == '2'){
                 lcd.clear();
                 lcd.setCursor(0, 0);
                 lcd.print("Vote Mode");
