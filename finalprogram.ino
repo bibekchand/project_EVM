@@ -3,26 +3,153 @@
 #include <Keypad.h>
 
 LiquidCrystal_I2C lcd(0x27,16,2);
+#include <WiFi.h>
+#include <ESPAsyncWebServer.h>
+#include <AsyncTCP.h>
+const char* ssid = "ESP32";  // Enter SSID here
+const char* password = "12345678";  //Enter Password here
+IPAddress local_ip(192,168,1,1);
+IPAddress gateway(192,168,1,1);
+IPAddress subnet(255,255,255,0);
+AsyncWebServer server(80);
+AsyncWebSocket ws("/ws");
+
+const char index_html[] PROGMEM = R"rawliteral(
+  <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Electronic Voting Machine</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        .middle {
+            background-image: url(election-nepal.webp);
+            height: 80vh;
+            background-size: cover;
+            padding: 10px;
+
+        }
+
+        .title {
+            border: 0.5px solid #dd2255;
+            /* border-radius: 45px; */
+            text-align: center;
+            font-size: 4rem;
+            width: 900px;
+            box-shadow: 2px 4px 0px rgb(218, 218, 125);
+            margin: 0 auto;
+            margin-top: 10px;
+            transition: ease-in-out 0.2s;
+            margin-bottom: 20px;
+        }
+
+        .title:hover {
+            background-color: rgb(193, 162, 162);
+        }
+
+        ul {
+            list-style: none;
+            display: flex;
+            justify-content: center;
+            gap: 50px;
+            font-size: 50px;
+        }
+
+        button {
+            font: inherit;
+            background-color: inherit;
+            border: 0.5px solid #dd2255;
+            text-align: center;
+            font-size: 4rem;
+            width: 200px;
+            box-shadow: 2px 4px 0px rgb(218, 218, 125);
+            margin: 0 auto;
+            transition: ease-in-out 0.2s;
+            cursor: pointer;
+        }
+
+        button:active {
+            background-color: rgb(187, 218, 244);
+        }
+
+        .candidates {
+            display: flex;
+            justify-content: space-evenly;
+            color: white;
+            margin-top: 50px;
+            backdrop-filter: blur(2px)
+        }
+
+        .candidates>* {
+            width: 200px;
+            height: 200px;
+            display: flex;
+            border: 2px solid black;
+            align-items: center;
+            justify-content: center;
+            background-color: rgb(230, 129, 129);
+            transition: .4s ease-in;
+            box-shadow: 2px 4px 0px rgb(218, 218, 125);
+        }
+        .candidates>*:hover{
+            background-color: rgb(203, 196, 187);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="title">Electronic Voting Machine</div>
+    <div class="middle">
+        <nav>
+            <ul>
+                <li> <a href="/results"><button id="enroll">Results</button></a></button>
+                </li>
+                <li><a href="/enroll"><button id="enroll">Enroll</button></a></li>
+            </ul>
+        </nav>
+        <div class="candidates">
+            <div id="one">Candidate One:<span> %C1% votes</span></div>
+
+            <div id="two">Candidate Two: <span>%C2% votes</span></div>
+            <div id="three">Candidate Three:<span>%C3% votes</span></div>
+        </div>
+
+    </div>
+    <div class="footer">
+        <p style="text-align: center; font-size: 2rem;">&copy Developed by BEI078</p>
+    </div>
+</body>
+
+</html>
+)rawliteral";
+
 
 #define RX_PIN 16  // RS307S TX -> ESP32 RX (GPIO16)
 #define TX_PIN 17  // RS307S RX -> ESP32 TX (GPIO17)
 #define BUTTON_PIN1 18
 #define BUTTON_PIN2 19
-#define BUTTON_PIN3 0
-#define BUTTON_PIN4 15
+#define BUTTON_PIN3 15
 #define EXIT_BUTTON_PIN 5 // Define a pin for the exit button
 #define Buzzer 4
-
+int votedArr[10]={0};
+int votedArrPointer=0;
 const byte ROWS = 4; // four rows
 const byte COLS = 4; // four columns
+
 char keys[ROWS][COLS] = {
-  {'1','2','3','A'},
-  {'4','5','6','B'},
-  {'7','8','9','C'},
-  {'*','0','#','D'}
+  {'1', '2', '3', 'A'},
+  {'4', '5', '6', 'B'},
+  {'7', '8', '9', 'C'},
+  {'*', '0', '#', 'D'}
 };
-byte rowPins[ROWS] = {25, 33, 32, 13}; // connect to the row pinouts of the keypad
-byte colPins[COLS] = {12, 14, 27, 26}; // connect to the column pinouts of the keypad
+byte rowPins[ROWS] = {32, 33, 25, 13}; // connect to the row pinouts of the keypad
+byte colPins[COLS] = {27, 14, 12, 26}; // connect to the column pinouts of the keypad
 
 Keypad keypad = Keypad( makeKeymap(keys), rowPins, colPins, ROWS, COLS );
 int candidateArray[3] = {0, 0, 0}; 
@@ -34,20 +161,24 @@ void setup() {
     mySerial.begin(57600, SERIAL_8N1, RX_PIN, TX_PIN);
     finger.begin(57600);
     lcd.init();
+    //lcd.backlighto();
     lcd.backlight();
-
     if (finger.verifyPassword()) {
         Serial.println("FingerPrint sensor Found!");
     } else {
         Serial.println("Fingerprint sensor NOT found!");
         while (1);  // Halt execution if the sensor is not detected
     }
+    WiFi.softAP(ssid, password);
+    WiFi.softAPConfig(local_ip, gateway, subnet);
+  server.on("/", HTTP_GET, root);
+  server.on("/results", HTTP_GET, handleResults);
 
+    server.begin();
     pinMode(Buzzer, OUTPUT);
     pinMode(BUTTON_PIN1, INPUT_PULLUP);
     pinMode(BUTTON_PIN2, INPUT_PULLUP);
     pinMode(BUTTON_PIN3, INPUT_PULLUP);
-    pinMode(BUTTON_PIN4, INPUT_PULLUP);
     pinMode(EXIT_BUTTON_PIN, INPUT_PULLUP); // Set up the exit button pin
 }
 
@@ -59,6 +190,24 @@ void printMenu(){
     lcd.print("2: Vote");
     Serial.println("Press 1 to Enroll or 2 to Vote");
 }
+void root(AsyncWebServerRequest *request){
+    request->send(200, "text/html", processHTML());
+}
+
+
+String processHTML() {
+    String html = index_html;
+    html.replace("%C1%", String(candidateArray[0]));
+    html.replace("%C2%", String(candidateArray[1]));
+    html.replace("%C3%", String(candidateArray[2]));
+    return html;
+}
+
+void handleResults(AsyncWebServerRequest *request){
+      request->send(200, "text/html", processHTML());
+
+}
+
 
 void loop() {
     printMenu();
@@ -66,6 +215,7 @@ void loop() {
     while(key == NO_KEY && (digitalRead(EXIT_BUTTON_PIN) == HIGH) ){ //input ko lagi wait gardai from keypad
       key = keypad.getKey();
     }
+    Serial.println(key);
     if (!digitalRead(EXIT_BUTTON_PIN)){
         checkForAdmin();
         return;
@@ -196,6 +346,12 @@ void enrollFingerprint(int id) {
     p = finger.storeModel(id);
     if (p == FINGERPRINT_OK) {
         Serial.println("Fingerprint enrolled successfully!");
+        lcd.home();
+        lcd.clear();
+        lcd.print("Enrolled");
+        lcd.setCursor(0, 1);
+        lcd.print("Successfully");
+        delay(2000);
     } else {
         Serial.println("Failed to store fingerprint!");
     }
@@ -208,6 +364,14 @@ void startVoting() {
       key = keypad.getKey();
     }
     int userInputId = key - '0'; //convert char from keypad into integer;
+    if(doubleVoting(userInputId)){
+      lcd.clear();
+      lcd.home();
+      lcd.print("Already Voted");
+      delay(2000);
+      return;
+    }
+
       lcd.setCursor(0,1);
       lcd.print(key);
       Serial.println(key);
@@ -254,6 +418,7 @@ void startVoting() {
       p = finger.fingerFastSearch();
       if (p == FINGERPRINT_OK) {
           Serial.print("Match found! Fingerprint ID: ");
+          Serial.println(finger.fingerID);
           lcd.clear();
           lcd.setCursor(0,0);
           lcd.print("Match Found");
@@ -261,12 +426,15 @@ void startVoting() {
             lcd.clear();
             lcd.home();
             lcd.print("Your ID doesn't match with fingerprint");
+            delay(2000);
             return;
           }
           if(finger.fingerID == 1){
             lcd.clear();
             lcd.home();
-            lcd.print("Admin");
+
+            lcd.print("Admin Verified");
+            delay(2000);
             displayVoteCount();
             return;
           }
@@ -286,6 +454,8 @@ void startVoting() {
           lcd.setCursor(10,0);
           lcd.print("c3");
           push_button();
+          votedArr[votedArrPointer] = userInputId;
+          votedArrPointer++;
          
       } else if (p == FINGERPRINT_NOTFOUND) {
           Serial.println("No match found in the database.");
@@ -305,17 +475,14 @@ void push_button() {
     int buttonState1 = 0;
     int buttonState2 = 0;
     int buttonState3 = 0;
-     int buttonState4 = 0;
     //wait for button being pressed
     while (noti == 0) {
         buttonState1 = !digitalRead(BUTTON_PIN1);
         buttonState2 = !digitalRead(BUTTON_PIN2);
         buttonState3 = !digitalRead(BUTTON_PIN3);
-        buttonState4 = !digitalRead(BUTTON_PIN4);
-        int sum  = buttonState1 + buttonState2 + buttonState3 + buttonState4; //to check for multiple buttons
+        int sum  = buttonState1 + buttonState2 + buttonState3; //to check for multiple buttons
         if ((buttonState1 || buttonState2 || buttonState3) && (sum==1)) {
             noti = 1;
-            break;
         }
     }
 
@@ -348,7 +515,15 @@ void displayVoteCount(){
   for(int i=0; i<3; i++){
     lcd.print(candidateArray[i]);
   }
+  delay(5000);
   return;
 }
 
+bool doubleVoting(int userId){
+  //search array
+  for(int i=0; i<10; i++){
+    if(votedArr[i] == userId) return true;
+}
+ return false;
+}
 
